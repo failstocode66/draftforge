@@ -1,0 +1,16 @@
+[
+  {
+    "claim_text": "REPLACE ME - the exact approved claim wording, e.g. 'magnesium is absorbed through the skin during a float'",
+    "claim_type": "hard",
+    "approved": true,
+    "source_citation": "REPLACE ME - the citation that substantiates this claim (study, regulator, primary source). Required for an approved HARD claim.",
+    "notes": "REPLACE ME - reviewer notes: scope, caveats, who approved it and when. This file is a FAKE format template and is NEVER read at runtime - the gate reads only the real data/claims_register.json."
+  },
+  {
+    "claim_text": "REPLACE ME - a soft/experiential claim, e.g. 'many people report feeling deeply relaxed after a float'",
+    "claim_type": "soft",
+    "approved": true,
+    "source_citation": "",
+    "notes": "Soft experiential claims do not require a citation; source_citation may be empty."
+  }
+]

@@ -1,0 +1,11 @@
+anthropic>=0.40
+pydantic>=2.7
+PyPDF2>=3.0
+trafilatura>=1.8
+requests>=2.31
+jinja2>=3.1
+gradio>=5.0,<6   # 6.x share/CDN serving is flaky; 5.x is the stable line
+python-dotenv>=1.0
+pytest>=8.0
+# dev-only: used by tests/fixtures generation (PDF fixtures), not at runtime
+reportlab>=4.0

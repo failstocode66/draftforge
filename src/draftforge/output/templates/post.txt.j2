@@ -1,0 +1,32 @@
+{# Human-readable rendering of one review-gated Draft.
+   ASCII-only on purpose: rendered text must print on any console encoding
+   (Windows cp1252 included) without raising.
+   trim_blocks + lstrip_blocks are enabled, so block tags on their own line
+   consume that line cleanly; field lines below each end in an explicit \n. #}
+===========================================================
+DRAFT {{ draft.id }}  [{{ draft.platform }} | {{ draft.angle }}]  ({{ draft.status }})
+===========================================================
+
+{{ draft.caption }}
+
+{% if draft.hashtags %}
+Hashtags: {{ draft.hashtags | join(" ") }}
+{% else %}
+Hashtags: (none)
+{% endif %}
+{% if draft.image_direction %}
+Image direction: {{ draft.image_direction }}
+{% endif %}
+{% if draft.claims_used %}
+Claims used:
+{% for claim in draft.claims_used %}
+  - {{ claim }}
+{% endfor %}
+{% else %}
+Claims used: (none)
+{% endif %}
+{% if draft.scheduled_date %}
+Scheduled: {{ draft.scheduled_date }}
+{% endif %}
+-----------------------------------------------------------
+Generated {{ generated_at }} | model {{ model_label }}

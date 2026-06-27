@@ -1,0 +1,2 @@
+# Treat PDFs as binary so line-ending normalization never corrupts them.
+*.pdf binary
