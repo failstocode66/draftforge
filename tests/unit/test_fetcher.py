@@ -4,12 +4,13 @@ from draftforge.ingest.fetcher import FetchError, fetch_url
 
 
 class FakeResponse:
-    """Minimal stand-in for a requests.Response."""
+    """Minimal stand-in for a requests.Response (no redirect-following)."""
 
-    def __init__(self, *, status_code=200, text="", url="http://example.com"):
+    def __init__(self, *, status_code=200, text="", url=None, headers=None):
         self.status_code = status_code
         self.text = text
         self.url = url
+        self.headers = headers or {}
 
 
 ARTICLE_HTML = """
@@ -31,14 +32,17 @@ ARTICLE_HTML = """
 def make_getter(response_or_exc):
     """Return a fake getter that yields a response or raises an exception."""
     calls = []
+    kwargs_seen = []
 
     def getter(url, *args, **kwargs):
         calls.append(url)
+        kwargs_seen.append(kwargs)
         if isinstance(response_or_exc, Exception):
             raise response_or_exc
         return response_or_exc
 
     getter.calls = calls
+    getter.kwargs_seen = kwargs_seen
     return getter
 
 
@@ -121,13 +125,33 @@ def test_allows_public_address():
     assert "deep relaxation" in text
 
 
-def test_blocks_redirect_to_internal_address():
-    # The request resolves public, but the final (post-redirect) URL points at an
-    # internal host — defense in depth catches it after the fetch.
+def test_getter_is_asked_not_to_follow_redirects():
+    getter = make_getter(FakeResponse(text=ARTICLE_HTML))
+
+    fetch_url("http://example.com/float", getter=getter, resolver=_public)
+
+    assert getter.kwargs_seen[0]["allow_redirects"] is False
+
+
+def test_blocks_redirect_to_internal_address_before_contacting_it():
+    # The first hop resolves public and answers with a redirect to an internal
+    # host. The Location is validated BEFORE any request to it: the getter is
+    # called exactly once (for the public URL) and never for the internal one.
     resolved = {"example.com": "93.184.216.34", "metadata.internal": "169.254.169.254"}
-    getter = make_getter(FakeResponse(text=ARTICLE_HTML, url="http://metadata.internal/x"))
+    getter = make_getter(
+        FakeResponse(status_code=302, headers={"Location": "http://metadata.internal/x"})
+    )
     with pytest.raises(FetchError, match="SSRF|non-public"):
         fetch_url("http://example.com/start", getter=getter, resolver=lambda h: resolved[h])
+    assert getter.calls == ["http://example.com/start"]
+
+
+def test_rejects_transport_that_already_followed_a_redirect():
+    # Defense in depth: a transport reporting a different final URL followed a
+    # redirect without per-hop validation, so its response is refused.
+    getter = make_getter(FakeResponse(text=ARTICLE_HTML, url="http://metadata.internal/x"))
+    with pytest.raises(FetchError, match="SSRF"):
+        fetch_url("http://example.com/start", getter=getter, resolver=_public)
 
 
 def test_unresolvable_host_becomes_fetch_error():

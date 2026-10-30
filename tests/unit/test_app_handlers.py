@@ -174,6 +174,60 @@ def test_handle_run_skips_blank_urls(grounded_base, store):
     assert len(out["drafts"]) == 2  # only the one real URL ingested
 
 
+def test_handle_run_refuses_redirect_to_internal_host_before_contact(grounded_base, store):
+    contacted = []
+
+    def redirecting_getter(url, *a, **k):
+        contacted.append(url)
+
+        class _Redirect:
+            status_code = 302
+            headers = {"Location": "http://169.254.169.254/latest/meta-data"}
+            text = ""
+
+        return _Redirect()
+
+    out = app.handle_run(
+        ["https://example.com/a"], "g", 2,
+        llm=make_llm(), store=store, base_dir=grounded_base,
+        getter=redirecting_getter, batch_id_factory=lambda: "b",
+    )
+    assert out["drafts"] == []
+    assert any("SSRF" in e for e in out["errors"])
+    assert contacted == ["https://example.com/a"]  # the metadata host never contacted
+
+
+def test_ingest_default_transport_connects_only_to_the_validated_address(monkeypatch):
+    # No getter injected -> the fetcher's pinned transport. The suite's conftest
+    # answers every DNS lookup (socket.getaddrinfo) with a fixed public IP; the
+    # socket must be opened to exactly that numeric address.
+    import socket
+
+    attempts = []
+
+    class RefusingSocket:
+        def __init__(self, family=-1, type=-1, *a, **k):
+            self.family = family
+
+        def settimeout(self, value):
+            pass
+
+        def connect(self, sockaddr):
+            attempts.append((self.family, sockaddr))
+            raise ConnectionRefusedError("offline test")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(socket, "socket", RefusingSocket)
+
+    sources, errors = app._ingest_urls(["http://example.com/a"])
+
+    assert sources == []
+    assert len(errors) == 1 and "example.com" in errors[0]
+    assert attempts == [(socket.AF_INET, ("93.184.216.34", 80))]
+
+
 def test_build_ui_is_callable():
     # build_ui must exist and be importable WITHOUT gradio loaded at module top.
     assert callable(app.build_ui)

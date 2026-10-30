@@ -15,9 +15,8 @@ handler. The three tabs (Run / Review / Calendar) share one :class:`Store` and a
 from __future__ import annotations
 
 import os
+import sys
 import uuid
-
-import requests
 
 from draftforge import inputs
 from draftforge.ingest.fetcher import FetchError, fetch_url
@@ -44,12 +43,13 @@ def _default_batch_id() -> str:
 # --- handlers (gradio-free, unit-tested) ---------------------------------------
 
 
-def _ingest_urls(urls, *, getter=requests.get):
+def _ingest_urls(urls, *, getter=None):
     """Fetch each non-blank URL into a Source, collecting per-URL failures.
 
     A failed fetch never aborts the run — its error is collected and the other
     URLs proceed (per-item isolation), mirroring ``run_batch``'s per-source
     isolation. Blank/whitespace entries (from a multiline textbox) are skipped.
+    ``getter=None`` uses the fetcher's destination-bound default transport.
     """
     sources = []
     errors = []
@@ -76,7 +76,7 @@ def handle_run(
     media_paths=None,
     transcript_text=None,
     base_dir=None,
-    getter=requests.get,
+    getter=None,
     batch_id_factory=_default_batch_id,
     now=None,
 ) -> dict:
@@ -588,13 +588,91 @@ def build_ui(*, db_path: str = _DEFAULT_DB, base_dir=None, llm: LLMClient | None
     return demo
 
 
-def launch(*, base_dir=None, **kwargs):  # pragma: no cover - thin production wrapper
-    """Launch the Gradio app, gated by ``APP_PASSWORD`` (username ``draftforge``)."""
-    from draftforge.config import Settings
+# Login is always the validated APP_PASSWORD; these Gradio options would replace it.
+_REFUSED_LAUNCH_KWARGS = frozenset({"auth", "auth_dependency"})
 
-    settings = Settings.load()
-    build_ui(base_dir=base_dir).launch(auth=_auth(settings.app_password), **kwargs)
+
+def launch(*, base_dir=None, server_name=None, share=None, environ=None, **kwargs):
+    """Validate the launch configuration, then build and launch the login-gated app.
+
+    The one launch path for both ``python app.py`` (repo root / Hugging Face
+    Spaces) and ``python -m draftforge.app``. Validation runs FIRST — before the
+    UI, the SQLite store, or any listener exists — so an unset/blank/example
+    ``APP_PASSWORD`` or a malformed bind option never reaches Gradio.
+
+    Binds ``127.0.0.1`` with no share link by default. Reaching the app from
+    other hosts needs an explicit opt-in (``server_name`` / ``--host`` /
+    ``DRAFTFORGE_HOST``, or ``share=True`` / ``--share``) and stays login-gated.
+
+    Args:
+        base_dir: Root the open receivers resolve under (see :func:`build_ui`).
+        server_name, share, environ: See
+            :func:`draftforge.config.load_launch_config`.
+        **kwargs: Other Gradio ``launch()`` options (e.g. ``server_port``).
+            ``auth`` / ``auth_dependency`` are refused.
+
+    Raises:
+        draftforge.config.LaunchConfigError: if the configuration is refused.
+    """
+    from draftforge.config import LaunchConfigError, load_launch_config
+
+    refused = sorted(_REFUSED_LAUNCH_KWARGS & kwargs.keys())
+    if refused:
+        raise LaunchConfigError(
+            f"launch() does not accept {', '.join(refused)}: login is always the "
+            "validated APP_PASSWORD (username draftforge)."
+        )
+    config = load_launch_config(server_name=server_name, share=share, environ=environ)
+    if config.external:
+        print(
+            f"DraftForge: bind {config.server_name} (share={config.share}) is "
+            "reachable beyond this machine; every request needs the login.",
+            file=sys.stderr,
+        )
+
+    os.makedirs(os.path.dirname(_DEFAULT_DB), exist_ok=True)  # the SQLite store's dir
+    demo = build_ui(base_dir=base_dir)
+    return demo.launch(
+        auth=_auth(config.app_password),
+        server_name=config.server_name,
+        share=config.share,
+        **kwargs,
+    )
+
+
+def main(argv=None) -> int:
+    """Command-line entry for the web app (``python app.py``, ``python -m draftforge.app``).
+
+    Returns 0 after the server stops, or 2 (with the reason on stderr) when the
+    launch configuration is refused.
+    """
+    import argparse
+
+    from draftforge.config import HOST_ENV_VAR, LOOPBACK_HOST, LaunchConfigError
+
+    parser = argparse.ArgumentParser(description="Launch the DraftForge web app (login-gated).")
+    parser.add_argument(
+        "--host",
+        default=None,
+        help=f"Bind address. Default {LOOPBACK_HOST} (this machine only), or "
+        f"{HOST_ENV_VAR} if set. Use 0.0.0.0 only when other hosts must reach the "
+        "login page.",
+    )
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="Create a temporary public gradio.live link (still login-gated) "
+        "so a remote tester can reach a locally-run instance.",
+    )
+    args, _ = parser.parse_known_args(argv)
+
+    try:
+        launch(server_name=args.host, share=args.share)
+    except LaunchConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover
-    launch()
+    raise SystemExit(main())

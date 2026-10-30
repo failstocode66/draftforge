@@ -12,28 +12,26 @@ pinned: false
 # DraftForge
 
 An AI content pipeline that turns a wellness business's source material into a batch of
-**review-gated, brand-voiced, claims-safe Facebook & Instagram draft posts**, dated across a
+**review-gated, brand-voiced, claims-checked Facebook & Instagram draft posts**, dated across a
 content calendar and exported for scheduling. It **stops at an approved draft** — a human
 reviews and approves every post before it leaves the tool (no auto-publishing).
 
-Built as **Portfolio Project #2** of a prompt-engineering retraining track, and shipped as a
-**live tool** for a real wellness studio — an independent float-tank / sensory-deprivation
-business. (Client details are kept private; the examples below use a fictional *Stillwater
-Float Co.* in their place.)
+DraftForge is a portfolio project. The examples below use a fictional *Stillwater Float Co.*;
+no real client data is included in this repository.
 
 > **Why it exists.** A small wellness business posts constantly across FB + IG. This reclaims
 > the owner's content-creation time *without* dropping cadence — while keeping a hard
-> owner-review gate and a **claims-safety guardrail** that flags un-substantiated health
-> claims (a real advertising-standards exposure for wellness copy).
+> owner-review gate and an **advisory claims check** that flags un-substantiated health
+> claims for the reviewer (a real advertising-standards exposure for wellness copy).
 
 ---
 
 ## What it demonstrates (portfolio lens)
 
 File handling · API integration · **prompt chaining** · structured-output validation ·
-**content moderation (a claims-safety gate)** · a web frontend — plus production rigor:
+**content moderation (an advisory claims check)** · a web frontend — plus production rigor:
 schema-validated structured outputs, cost-aware model routing, baseline-comparison prompt
-docs, a fail-loud "open receivers" input model, and **419 offline unit tests** (the whole
+docs, a fail-loud "open receivers" input model, and an **offline unit-test suite** (the whole
 chain is testable without an API key via an injected `FakeLLM`).
 
 ---
@@ -63,12 +61,14 @@ chain is testable without an API key via an injected `FakeLLM`).
   JSON / rate-limit; Pydantic-validated outputs) and is dependency-injected, so the whole
   pipeline runs in tests against canned responses.
 - **Cost-aware routing:** Haiku for classify/extract, Opus for generate + claims-check.
-- **`run_batch` is pure** (no store, no I/O); persistence + media pairing happen in the
-  caller, so the core stays trivially testable.
+- **`run_batch` is dependency-injected and separate from persistence:** it never touches the
+  store (persistence + media pairing happen in the caller), and it makes model calls only
+  through the LLM client it is given — live API calls with the real transport, canned
+  responses in tests.
 
 ---
 
-## The claims-safety gate (the differentiator)
+## The claims check (advisory — the differentiator)
 
 Wellness copy routinely asserts health effects ("relieves chronic pain", "releases dopamine
 and endorphins") without citations. The gate classifies each claim and routes it — **relaxed,
@@ -101,8 +101,13 @@ cp .env.example .env                                # then fill in the values
 ANTHROPIC_API_KEY=sk-ant-...
 MODEL_FAST=claude-haiku-4-5-20251001
 MODEL_SMART=claude-opus-4-8
-APP_PASSWORD=change-me           # gates the Gradio app (username: draftforge)
+APP_PASSWORD=                    # REQUIRED for the web app (username: draftforge): your own value
+# DRAFTFORGE_HOST=127.0.0.1      # optional web-app bind; 0.0.0.0 only if other hosts must connect
 ```
+
+There is **no default password**: the web app refuses to start if `APP_PASSWORD` is unset,
+blank, whitespace-only, or a documented example value (such as the old `change-me`). That is a
+deny-list, not a strength check — choosing a long, unique password is your responsibility.
 
 ### Real-data "open receivers" (fail-loud, no silent placeholders)
 
@@ -134,8 +139,19 @@ python -m draftforge.cli \
 ### Web app (Gradio, auth-gated)
 
 ```bash
-python app.py                  # http://localhost:7860 — login: draftforge / $APP_PASSWORD
+python app.py                  # http://127.0.0.1:7860 — login: draftforge / $APP_PASSWORD
+python app.py --host 0.0.0.0   # opt in: reachable from other hosts (still login-gated)
+python app.py --share          # opt in: temporary public gradio.live link (still login-gated)
 ```
+
+`python -m draftforge.app` is the same launcher. Before building the UI, opening the store or
+listening, it validates `APP_PASSWORD` (see Setup) and requires `ANTHROPIC_API_KEY`. It binds
+`127.0.0.1` with no share link unless you opt in with `--host` / `DRAFTFORGE_HOST` or `--share`;
+Gradio's own `GRADIO_SERVER_NAME` / `GRADIO_SHARE` variables are not used. A hosted container
+(e.g. a Hugging Face Space, which runs `app.py` as its app file) needs `APP_PASSWORD` set as a
+secret and `DRAFTFORGE_HOST=0.0.0.0` set as a variable; that hosted path is not exercised by this
+repository's tests. Importing `app.py` builds nothing (there is no module-level `demo`), so a
+discovery-style launcher cannot serve the UI without the login.
 
 - **Run** — source URLs + guidance + batch size + media upload → generate drafts.
 - **Review** — one Stacked card at a time: the claim badge (advisory, non-blocking), edit
@@ -157,7 +173,7 @@ python app.py                  # http://localhost:7860 — login: draftforge / $
 ## Testing
 
 ```bash
-pytest -q                       # 419 offline unit tests (no key, no network)
+pytest -q                       # offline unit tests (no key, no network)
 pytest -q tests/smoke -m smoke  # live API smoke tests (opt-in; needs ANTHROPIC_API_KEY)
 ```
 
@@ -168,16 +184,37 @@ suite network-free.
 
 ## Project status & roadmap
 
-**v1 (current):** ingest → … → claims gate → review → approved draft → calendar export.
-Phases P0–P3 + media (Phase M) are **build-complete with a green offline test suite**.
-Deploy-hardened: URL fetching has an **SSRF guard** (refuses internal/metadata/private
-addresses + non-http(s) schemes, re-checks redirects) and scraped source text is
-**delimited as untrusted data** against indirect prompt injection.
+**v1 (current):** ingest → … → claims check → review → approved draft → calendar export.
+Phases P0–P3 + media (Phase M) are implemented and covered by the offline unit suite. This
+repository does not demonstrate a live deployment or a live end-to-end run.
+
+**Security model (what the code enforces):**
+
+- **Login is mandatory** for the web app: no default password; unset / blank / example values
+  are refused before anything starts (see Setup).
+- **Loopback by default:** `127.0.0.1`, share off; external reach is an explicit opt-in.
+- **URL fetching (SSRF guard):** http/https on ports 80/443 only, no embedded credentials.
+  Every hop — including each redirect target — is validated *before* it is contacted: every
+  resolved address must be public (loopback, private, link-local incl. cloud metadata, shared,
+  reserved, multicast and unspecified are refused, also when embedded in IPv6). Redirects are
+  followed manually (relative `Location`s resolved, at most 5, loops refused). Every A and AAAA
+  answer is checked — one non-public answer rejects the host — and the connection is made only
+  to those validated numeric addresses — no second lookup — while HTTPS still verifies the
+  certificate for the original host name. Each request has one 30 s deadline covering connect,
+  TLS, headers, chunk framing and body, so a slow-drip server cannot hold a fetch open.
+- Scraped source text is **delimited as untrusted data** in prompts — a mitigation for indirect
+  prompt injection, not a guarantee.
 
 **Known limitations / next:**
 
 - **Live end-to-end smoke is pending** real grounding data (the open receivers above) + a key —
   the app *correctly* fails loud until they're filled.
+- **Security residuals:** the Gradio login is the only access control, so any external bind
+  needs a strong password and, outside a trusted network, HTTPS in front. The URL fetcher
+  refuses a host whose DNS answers mix public and non-public addresses, ignores proxy settings
+  (an egress proxy is unsupported), refuses compressed or >10 MiB responses, and applies its
+  30 s deadline per request (a redirect chain is at most 6 requests). A running service's
+  configuration is outside what this repository can show.
 - **Transcript cleaner** (the `data/corpus/` builder) is **mechanical** by design (it preserves
   the author's voice rather than LLM-rewriting it); on very noisy auto-transcripts it leaves
   some rough edges — fine for voice grounding, not publication-grade prose.

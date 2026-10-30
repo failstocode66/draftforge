@@ -1,40 +1,27 @@
 """Entrypoint for Hugging Face Spaces (and local `python app.py`).
 
-HF Spaces runs this file (``app_file: app.py`` in the README frontmatter). It puts
-``src/`` on the path, exposes a module-level ``demo`` for Spaces to discover, and —
-when run as the main script (which is how Spaces launches it) — starts the server
-gated by ``APP_PASSWORD`` (username ``draftforge``).
+HF Spaces runs this file (``app_file: app.py`` in the README frontmatter) as the
+main script. It puts ``src/`` on the path and hands off to
+:func:`draftforge.app.main` — the same validated launch path as
+``python -m draftforge.app``. That validates ``APP_PASSWORD`` (required; no
+default, example values refused) and the bind options BEFORE the UI, the store,
+or any listener is created, then serves the login-gated app (username
+``draftforge``) on ``127.0.0.1`` unless the operator explicitly opts in with
+``--host`` / ``DRAFTFORGE_HOST`` or ``--share``.
 
-The real handlers/UI live in :mod:`draftforge.app`; this is a thin launcher kept at
-the repo root only because that is where Spaces looks for the app file.
+Importing this module builds nothing: there is deliberately no module-level
+``demo``, because a discovered-and-served Blocks object would bypass the
+validated launch (and its login). The real handlers/UI live in
+:mod:`draftforge.app`; this thin launcher stays at the repo root only because
+that is where Spaces looks for the app file.
 """
 
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src"))
-os.makedirs("data", exist_ok=True)  # the SQLite store's parent dir
 
-from draftforge.app import _auth, build_ui  # noqa: E402
-
-# Module-level Blocks so Hugging Face Spaces can discover the app.
-demo = build_ui()
+from draftforge.app import main  # noqa: E402
 
 if __name__ == "__main__":
-    import argparse
-
-    from draftforge.config import Settings
-
-    parser = argparse.ArgumentParser(description="Launch DraftForge (auth-gated).")
-    parser.add_argument(
-        "--share",
-        action="store_true",
-        help="Create a temporary public gradio.live link (still password-gated) "
-        "so a remote tester can reach a locally-run instance.",
-    )
-    args, _ = parser.parse_known_args()
-
-    settings = Settings.load()  # requires ANTHROPIC_API_KEY
-    demo.launch(
-        server_name="0.0.0.0", share=args.share, auth=_auth(settings.app_password)
-    )
+    raise SystemExit(main())
